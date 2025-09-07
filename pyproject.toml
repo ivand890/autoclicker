@@ -1,0 +1,11 @@
+[project]
+name = "autoclicker"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "keyboard>=0.13.5",
+    "pyautogui>=0.9.54",
+    "pynput>=1.8.1",
+]
