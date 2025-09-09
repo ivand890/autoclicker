@@ -8,6 +8,7 @@ import importlib
 import sys
 import shutil
 from dataclasses import dataclass
+
 try:
     importlib.import_module("Quartz")
     _HAS_QUARTZ = True
@@ -114,11 +115,7 @@ class StatusRenderer:
         )
         cps_val = f"{cps:4.1f}" if st.click_count else " 0.0"
         clicks_val = f"{st.click_count:6d}"
-        fb_seg = f"fb:{st.fallbacks}" if st.fallbacks else None
-        msg_seg = None
-        if st.message and st.message_ts and (now - st.message_ts) < 2.5:
-            msg_seg = st.message
-        segments = [
+        line_parts = [
             f"{spinner}{state_sym}",
             f"delay:{delay_val}",
             f"rng:{rng_val}",
@@ -132,11 +129,11 @@ class StatusRenderer:
             f"next:{next_val}",
             f"cps:{cps_val}",
         ]
-        if fb_seg:
-            segments.append(fb_seg)
-        if msg_seg:
-            segments.append(msg_seg)
-        line = " | ".join(segments)
+        if st.fallbacks:
+            line_parts.append(f"fb:{st.fallbacks}")
+        if st.message and st.message_ts and (now - st.message_ts) < 2.5:
+            line_parts.append(st.message)
+        line = " | ".join(line_parts)
         # Color minimal elements
         if self.use_color:
             if st.running:
@@ -209,9 +206,8 @@ def _set_message(msg: str):
     status.message_ts = time.time()
     status_renderer.mark()
 
+
 # Configure pyautogui safety
-
-
 pyautogui.FAILSAFE = False  # disable corner failsafe to avoid unintended stops
 pyautogui.PAUSE = 0  # no extra pause added by pyautogui
 
@@ -463,7 +459,38 @@ def on_release(key):
         pass
 
 
-def main():
+def main():  # pragma: no cover - interactive app
+    # Safety: honor simple flags here too, so that even if the CLI wrapper is
+    # bypassed (or an older entry point is used), we don't start the loop.
+    try:
+        import sys as _sys
+        _argv = _sys.argv[1:]
+        if any(a in ("-h", "--help") for a in _argv):
+            _help_lines = [
+                "autoclicker — macOS-friendly Python autoclicker",
+                "",
+                "Usage:",
+                "  autoclicker [--help] [--version]",
+                "",
+                "Notes:",
+                "  - Grant Accessibility and Input Monitoring",
+                "    permissions to your terminal app in macOS settings,",
+                "    then restart the terminal.",
+                "  - Hotkeys:",
+                "      s start/pause • +/− speed • ]/[ hold • m method •",
+                "      c test",
+                "      j jitter • d debug • Ctrl+Alt+K lock",
+            ]
+            print("\n".join(_help_lines))
+            return
+        if any(a in ("-V", "--version") for a in _argv):
+            from . import __version__ as _ver
+            print(_ver)
+            return
+    except Exception:
+        # Never block startup if flag parsing fails; continue normally.
+        pass
+
     # Single listener handles both local keys and global combo
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.start()
@@ -471,7 +498,7 @@ def main():
     print("Autoclicker ready (status line below). Press Ctrl+C to exit.")
     print(
         "Keys: 's' start/pause, '+' faster, '-' slower, '['/']' hold time,\n"
-        "      'm' method, 'c' test, 'd' debug, 'j' jitter,\n"
+        "      'm' method, 'c' test, 'j' jitter, 'd' debug,\n"
         "      Ctrl+Alt+K lock keys"
     )
     _refresh_status()
@@ -499,7 +526,6 @@ def main():
                 time.sleep(0.05)
             status_renderer.maybe_render(status)
     except KeyboardInterrupt:
-        status_renderer.finalize(status)
         print("Autoclicker stopped.")
     finally:
         try:
@@ -510,7 +536,3 @@ def main():
             status_renderer.finalize(status)
         except Exception:
             pass
-
-
-if __name__ == "__main__":
-    main()

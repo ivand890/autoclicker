@@ -21,22 +21,72 @@ A Python autoclicker with a macOS-friendly multi-engine click system. It prefers
 - Click method: `quartz` if Quartz/PyObjC is available; otherwise `pynput`
 - Jitter: disabled by default
 
-## Installation
+## Installation & CLI usage (uv)
 
-1. Ensure you have Python `>=3.11`.
-2. Install dependencies with `uv`:
+Requires Python `>=3.11` and `uv` installed.
+
+- One-off run without installation (preferred for quick use):
+
+   ```bash
+   uvx autoclicker --help
+   uvx autoclicker --version
+   uvx autoclicker
+   ```
+
+- Install globally as a persistent tool (adds `autoclicker` to your `PATH`):
+
+   ```bash
+   uv tool install autoclicker
+   # then simply:
+   autoclicker
+   ```
+
+- Run from a local checkout without publishing:
+
+   ```bash
+   # ephemeral run from the current workspace
+   # NOTE: `uv tool run` uses a cached, isolated env. Add `--refresh` to
+   # pick up local source changes if you haven't bumped the version.
+   uv tool run --from . --refresh autoclicker
+   # or install the local project as a tool
+   uv tool install .
+   ```
+
+Development workflow (recommended):
+
+- Set up the project environment and run the packaged script:
 
    ```bash
    uv sync
+      # see flags
+      uv run autoclicker --help
+      uv run autoclicker --version
+      # run the console script
+      uv run autoclicker
+   # or run the module directly
+      uv run -m autoclicker --help
    ```
+
+Tip: If `uv tool run --from . autoclicker` dont reflect your local changes,
+it's likely using a previously cached tool environment. Fix it by either:
+
+- adding `--refresh` (recommended for local dev):
+
+  ```bash
+  uv tool run --from . --refresh autoclicker --help
+  uv tool run --from . --refresh autoclicker --version
+  ```
+
+- or bumping the package `version` in `pyproject.toml` (forces a new cache key)
+- or pruning caches:
+
+  ```bash
+  uv cache clean autoclicker
+  ```
 
 ## Usage
 
-1. Run the script:
-
-   ```bash
-   uv run main.py
-   ```
+1. Run the program (any of the methods above):
 
 2. Move your mouse to the desired click position.
 3. Press `s` to start; press `s` again to pause.
