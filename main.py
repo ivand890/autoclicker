@@ -5,6 +5,9 @@ from pynput import keyboard
 from pynput.keyboard import Key
 from pynput.mouse import Controller as MouseController, Button
 import importlib
+import sys
+import shutil
+from dataclasses import dataclass
 try:
     importlib.import_module("Quartz")
     _HAS_QUARTZ = True
@@ -18,6 +21,9 @@ delay = 0.5  # base delay in seconds (default)
 min_delay = 0.05
 max_delay = 5.0
 hold_time = 0.1  # how long to hold the button down per click
+# Randomization multipliers for per-click delay
+MIN_DELAY_MULTIPLIER = 0.5
+MAX_DELAY_MULTIPLIER = 1.5
 # Preferred click method: "pynput", "pyautogui", or "quartz" (macOS)
 # Default to Quartz if available for best macOS compatibility
 click_method = "quartz" if _HAS_QUARTZ else "pynput"
@@ -28,7 +34,184 @@ local_keys_enabled = True  # when False, only the global hotkey works
 _pressed_keys = set()  # track currently pressed keys for combo detection
 
 
+# ---------------- Status line support -----------------
+@dataclass
+class Status:
+    start_time: float
+    running: bool
+    delay: float
+    hold_time: float
+    click_method: str
+    jitter_enabled: bool
+    debug: bool
+    local_keys_enabled: bool
+    click_count: int = 0
+    last_click_ts: float | None = None
+    next_delay: float | None = None
+    fallbacks: int = 0
+    message: str | None = None
+    message_ts: float | None = None
+
+
+class StatusRenderer:
+    def __init__(self, use_color: bool = True, interval: float = 0.1):
+        self.interval = interval
+        self.last_render = 0.0
+        self.dirty = True
+        self.use_color = use_color and sys.stdout.isatty()
+        self._cached_line = ""
+        self._spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        self._spinner_idx = 0
+        self._last_spinner_tick = 0.0
+
+    def mark(self):
+        self.dirty = True
+
+    def _color(self, text: str, code: str):
+        if not self.use_color:
+            return text
+        return f"\x1b[{code}m{text}\x1b[0m"
+
+    def build_line(self, st: Status) -> str:
+        now = time.time()
+        # Spinner only when running
+        spinner = ''
+        if st.running and now - self._last_spinner_tick > 0.15:
+            self._spinner_idx = (self._spinner_idx + 1) % len(self._spinners)
+            self._last_spinner_tick = now
+        if st.running:
+            spinner = self._spinners[self._spinner_idx] + ' '
+        state_sym = '▶' if st.running else '⏸'
+        # lock shows yes/no for compatibility (yes = locked)
+        lock_val = 'no' if st.local_keys_enabled else 'yes'
+        jitter_sym = 'J' if st.jitter_enabled else '-'
+        debug_sym = 'D' if st.debug else '-'
+        method_map = {
+            'quartz': 'QTZ',
+            'pynput': 'PNP',
+            'pyautogui': 'PGA'
+        }
+        method_disp = method_map.get(st.click_method, st.click_method)
+        # Fixed width numeric fields to avoid jitter
+        delay_val = f"{st.delay:5.2f}s"
+        rng_lo = f"{st.delay*MIN_DELAY_MULTIPLIER:5.2f}"
+        rng_hi = f"{st.delay*MAX_DELAY_MULTIPLIER:5.2f}"
+        rng_val = f"{rng_lo}–{rng_hi}"
+        hold_val = f"{st.hold_time:5.2f}s"
+        last_age = (now - st.last_click_ts) if st.last_click_ts else None
+        if last_age is not None:
+            last_val = f"{last_age:5.2f}s"
+        else:
+            last_val = "  --  "
+        if st.next_delay is not None:
+            next_val = f"{st.next_delay:5.2f}s"
+        else:
+            next_val = "  --  "
+        elapsed = now - st.start_time
+        cps = (
+            (st.click_count / elapsed)
+            if st.click_count and elapsed > 0 else 0.0
+        )
+        cps_val = f"{cps:4.1f}" if st.click_count else " 0.0"
+        clicks_val = f"{st.click_count:6d}"
+        fb_seg = f"fb:{st.fallbacks}" if st.fallbacks else None
+        msg_seg = None
+        if st.message and st.message_ts and (now - st.message_ts) < 2.5:
+            msg_seg = st.message
+        segments = [
+            f"{spinner}{state_sym}",
+            f"delay:{delay_val}",
+            f"rng:{rng_val}",
+            f"hold:{hold_val}",
+            f"meth:{method_disp}",
+            f"jitter:{jitter_sym}",
+            f"debug:{debug_sym}",
+            f"lock:{lock_val}",
+            f"clicks:{clicks_val}",
+            f"last:{last_val}",
+            f"next:{next_val}",
+            f"cps:{cps_val}",
+        ]
+        if fb_seg:
+            segments.append(fb_seg)
+        if msg_seg:
+            segments.append(msg_seg)
+        line = " | ".join(segments)
+        # Color minimal elements
+        if self.use_color:
+            if st.running:
+                line = line.replace(state_sym, self._color(state_sym, '32'))
+            else:
+                line = line.replace(state_sym, self._color(state_sym, '33'))
+            if not st.local_keys_enabled:
+                line = line.replace('lock:yes', self._color('lock:yes', '31'))
+        width = shutil.get_terminal_size(fallback=(120, 20)).columns
+        if len(line) > width:
+            line = line[:max(0, width-1)] + '…'
+        return line
+
+    def maybe_render(self, st: Status, force: bool = False):
+        now = time.time()
+        if (
+            not self.dirty and not force and
+            (now - self.last_render) < self.interval
+        ):
+            return
+        line = self.build_line(st)
+        if line != self._cached_line or force:
+            sys.stdout.write('\r' + line + '\x1b[K')
+            sys.stdout.flush()
+            self._cached_line = line
+        self.dirty = False
+        self.last_render = now
+
+    def finalize(self, st: Status):
+        # Clear line then print summary
+        elapsed = time.time() - st.start_time
+        summary = (
+            f"Stopped after {st.click_count} clicks in {elapsed:.1f}s "
+            f"(avg {(st.click_count/elapsed) if elapsed > 0 else 0:.2f} cps)"
+        )
+        sys.stdout.write(
+            '\r' + ' ' * max(len(self._cached_line), len(summary)) + '\r'
+        )
+        print(summary)
+
+
+status = Status(
+    start_time=time.time(),
+    running=running,
+    delay=delay,
+    hold_time=hold_time,
+    click_method=click_method,
+    jitter_enabled=jitter_enabled,
+    debug=debug,
+    local_keys_enabled=local_keys_enabled,
+)
+status_renderer = StatusRenderer()
+
+
+def _refresh_status(mark: bool = True):
+    # Sync global vars into status object
+    status.running = running
+    status.delay = delay
+    status.hold_time = hold_time
+    status.click_method = click_method
+    status.jitter_enabled = jitter_enabled
+    status.debug = debug
+    status.local_keys_enabled = local_keys_enabled
+    if mark:
+        status_renderer.mark()
+
+
+def _set_message(msg: str):
+    status.message = msg
+    status.message_ts = time.time()
+    status_renderer.mark()
+
 # Configure pyautogui safety
+
+
 pyautogui.FAILSAFE = False  # disable corner failsafe to avoid unintended stops
 pyautogui.PAUSE = 0  # no extra pause added by pyautogui
 
@@ -119,6 +302,9 @@ def perform_click(with_jitter: bool = True):
             _click_with_quartz()
         else:
             _click_with_pyautogui()
+        status.click_count += 1
+        status.last_click_ts = time.time()
+        status_renderer.mark()
     except Exception as e:
         # Fallback to the other method once if one fails
         order = ["pynput", "quartz", "pyautogui"]
@@ -130,18 +316,25 @@ def perform_click(with_jitter: bool = True):
         if debug:
             print(f"Click via {click_method} failed: {e} -> trying {other}")
         click_method = other
+        status.fallbacks += 1
+        status_renderer.mark()
+        _set_message(f"fallback->{other}")
         if other == "pynput":
             _click_with_pynput()
         elif other == "quartz":
             _click_with_quartz()
         else:
             _click_with_pyautogui()
+        status.click_count += 1
+        status.last_click_ts = time.time()
+        status_renderer.mark()
 
 
 def toggle_running():
     global running
     running = not running
-    print("Autoclicker", "started" if running else "paused")
+    _set_message("started" if running else "paused")
+    _refresh_status()
 
 
 def global_toggle_keys():
@@ -149,34 +342,36 @@ def global_toggle_keys():
     global local_keys_enabled
     local_keys_enabled = not local_keys_enabled
 
-    if local_keys_enabled:
-        print("Local keys enabled")
-    else:
-        print("Local keys disabled (only Ctrl+Alt+K works)")
+    _set_message("keys:unlocked" if local_keys_enabled else "keys:locked")
+    _refresh_status()
 
 
 def increase_speed():
     global delay
     delay = max(min_delay, round(delay - 0.1, 3))
-    print(f"Speed increased, delay: {delay}s")
+    _set_message(f"delay {delay:.2f}s")
+    _refresh_status()
 
 
 def decrease_speed():
     global delay
     delay = min(max_delay, round(delay + 0.1, 3))
-    print(f"Speed decreased, delay: {delay}s")
+    _set_message(f"delay {delay:.2f}s")
+    _refresh_status()
 
 
 def increase_hold():
     global hold_time
     hold_time = min(0.25, round(hold_time + 0.005, 3))
-    print(f"Hold time increased to {hold_time}s")
+    _set_message(f"hold {hold_time:.3f}s")
+    _refresh_status()
 
 
 def decrease_hold():
     global hold_time
     hold_time = max(0.0, round(hold_time - 0.005, 3))
-    print(f"Hold time decreased to {hold_time}s")
+    _set_message(f"hold {hold_time:.3f}s")
+    _refresh_status()
 
 
 def toggle_method():
@@ -188,19 +383,22 @@ def toggle_method():
     except ValueError:
         idx = 0
     click_method = order[(idx + 1) % len(order)]
-    print(f"Click method: {click_method}")
+    _set_message(f"method {click_method}")
+    _refresh_status()
 
 
 def single_test_click():
     pos = pyautogui.position()
-    print(f"Test click at {pos} using {click_method} (hold {hold_time}s)")
+    _set_message(f"test {pos[0]},{pos[1]}")
     perform_click(with_jitter=False)
+    _refresh_status()
 
 
 def toggle_debug():
     global debug
     debug = not debug
-    print(f"Debug {'enabled' if debug else 'disabled'}")
+    _set_message("debug:on" if debug else "debug:off")
+    _refresh_status()
 
 
 def _is_ctrl(key):
@@ -251,7 +449,8 @@ def on_press(key):
             global jitter_enabled
             jitter_enabled = not jitter_enabled
             state = 'enabled' if jitter_enabled else 'disabled'
-            print(f"Jitter {state} (px={jitter_px})")
+            _set_message(f"jitter:{state}")
+            _refresh_status()
     except Exception:
         pass
 
@@ -269,12 +468,13 @@ def main():
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.start()
 
+    print("Autoclicker ready (status line below). Press Ctrl+C to exit.")
     print(
-        "Autoclicker ready.\n"
         "Keys: 's' start/pause, '+' faster, '-' slower, '['/']' hold time,\n"
-        "      'm' toggle method, 'c' test click, 'd' debug, 'j' jitter.\n"
-        "Global: Ctrl+Alt+K lock/unlock local keys (doesn't affect clicking)"
+        "      'm' method, 'c' test, 'd' debug, 'j' jitter,\n"
+        "      Ctrl+Alt+K lock keys"
     )
+    _refresh_status()
 
     try:
         while True:
@@ -286,14 +486,28 @@ def main():
                         f"(delay {delay}s, hold {hold_time}s)"
                     )
                 perform_click(with_jitter=True)
-                time.sleep(random.uniform(delay * 0.5, delay * 1.5))
+                nd = random.uniform(
+                    delay * MIN_DELAY_MULTIPLIER, delay * MAX_DELAY_MULTIPLIER
+                )
+                status.next_delay = nd
+                status_renderer.mark()
+                status_renderer.maybe_render(status)
+                time.sleep(nd)
+                status.next_delay = None
+                status_renderer.mark()
             else:
                 time.sleep(0.05)
+            status_renderer.maybe_render(status)
     except KeyboardInterrupt:
+        status_renderer.finalize(status)
         print("Autoclicker stopped.")
     finally:
         try:
             listener.stop()
+        except Exception:
+            pass
+        try:
+            status_renderer.finalize(status)
         except Exception:
             pass
 
