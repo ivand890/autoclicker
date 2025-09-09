@@ -526,7 +526,6 @@ def main():  # pragma: no cover - interactive app
                 time.sleep(0.05)
             status_renderer.maybe_render(status)
     except KeyboardInterrupt:
-        status_renderer.finalize(status)
         print("Autoclicker stopped.")
     finally:
         try:
