@@ -21,6 +21,9 @@ delay = 0.5  # base delay in seconds (default)
 min_delay = 0.05
 max_delay = 5.0
 hold_time = 0.1  # how long to hold the button down per click
+# Randomization multipliers for per-click delay
+MIN_DELAY_MULTIPLIER = 0.5
+MAX_DELAY_MULTIPLIER = 1.5
 # Preferred click method: "pynput", "pyautogui", or "quartz" (macOS)
 # Default to Quartz if available for best macOS compatibility
 click_method = "quartz" if _HAS_QUARTZ else "pynput"
@@ -91,8 +94,8 @@ class StatusRenderer:
         method_disp = method_map.get(st.click_method, st.click_method)
         # Fixed width numeric fields to avoid jitter
         delay_val = f"{st.delay:5.2f}s"
-        rng_lo = f"{st.delay*0.5:5.2f}"
-        rng_hi = f"{st.delay*1.5:5.2f}"
+        rng_lo = f"{st.delay*MIN_DELAY_MULTIPLIER:5.2f}"
+        rng_hi = f"{st.delay*MAX_DELAY_MULTIPLIER:5.2f}"
         rng_val = f"{rng_lo}–{rng_hi}"
         hold_val = f"{st.hold_time:5.2f}s"
         last_age = (now - st.last_click_ts) if st.last_click_ts else None
@@ -483,7 +486,9 @@ def main():
                         f"(delay {delay}s, hold {hold_time}s)"
                     )
                 perform_click(with_jitter=True)
-                nd = random.uniform(delay * 0.5, delay * 1.5)
+                nd = random.uniform(
+                    delay * MIN_DELAY_MULTIPLIER, delay * MAX_DELAY_MULTIPLIER
+                )
                 status.next_delay = nd
                 status_renderer.mark()
                 status_renderer.maybe_render(status)
