@@ -1,10 +1,28 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+
+# Build artifacts
 build/
 dist/
 wheels/
-*.egg-info
 
 # Virtual environments
-.venv
+.venv/
+.env/
+
+# Coverage and test outputs
+.coverage
+htmlcov/
+pytest_cache/
+
+# macOS
+.DS_Store
+
+# uv caches
+.uv-cache/
+.cache/
