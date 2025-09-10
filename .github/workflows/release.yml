@@ -62,7 +62,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Uses OIDC with PyPI Trusted Publishers; ensure project is configured on PyPI.
-          uv publish --skip-existing --check-url https://pypi.org/simple
+          uv publish --skip-existing --check-url https://pypi.org/simple/
 
   publish-to-testpypi:
     if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'rc')
