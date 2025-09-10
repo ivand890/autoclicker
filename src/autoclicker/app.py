@@ -61,7 +61,7 @@ class StatusRenderer:
         self.dirty = True
         self.use_color = use_color and sys.stdout.isatty()
         self._cached_line = ""
-        self._spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        self._spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         self._spinner_idx = 0
         self._last_spinner_tick = 0.0
 
@@ -76,27 +76,23 @@ class StatusRenderer:
     def build_line(self, st: Status) -> str:
         now = time.time()
         # Spinner only when running
-        spinner = ''
+        spinner = ""
         if st.running and now - self._last_spinner_tick > 0.15:
             self._spinner_idx = (self._spinner_idx + 1) % len(self._spinners)
             self._last_spinner_tick = now
         if st.running:
-            spinner = self._spinners[self._spinner_idx] + ' '
-        state_sym = '▶' if st.running else '⏸'
+            spinner = self._spinners[self._spinner_idx] + " "
+        state_sym = "▶" if st.running else "⏸"
         # lock shows yes/no for compatibility (yes = locked)
-        lock_val = 'no' if st.local_keys_enabled else 'yes'
-        jitter_sym = 'J' if st.jitter_enabled else '-'
-        debug_sym = 'D' if st.debug else '-'
-        method_map = {
-            'quartz': 'QTZ',
-            'pynput': 'PNP',
-            'pyautogui': 'PGA'
-        }
+        lock_val = "no" if st.local_keys_enabled else "yes"
+        jitter_sym = "J" if st.jitter_enabled else "-"
+        debug_sym = "D" if st.debug else "-"
+        method_map = {"quartz": "QTZ", "pynput": "PNP", "pyautogui": "PGA"}
         method_disp = method_map.get(st.click_method, st.click_method)
         # Fixed width numeric fields to avoid jitter
         delay_val = f"{st.delay:5.2f}s"
-        rng_lo = f"{st.delay*MIN_DELAY_MULTIPLIER:5.2f}"
-        rng_hi = f"{st.delay*MAX_DELAY_MULTIPLIER:5.2f}"
+        rng_lo = f"{st.delay * MIN_DELAY_MULTIPLIER:5.2f}"
+        rng_hi = f"{st.delay * MAX_DELAY_MULTIPLIER:5.2f}"
         rng_val = f"{rng_lo}–{rng_hi}"
         hold_val = f"{st.hold_time:5.2f}s"
         last_age = (now - st.last_click_ts) if st.last_click_ts else None
@@ -109,10 +105,7 @@ class StatusRenderer:
         else:
             next_val = "  --  "
         elapsed = now - st.start_time
-        cps = (
-            (st.click_count / elapsed)
-            if st.click_count and elapsed > 0 else 0.0
-        )
+        cps = (st.click_count / elapsed) if st.click_count and elapsed > 0 else 0.0
         cps_val = f"{cps:4.1f}" if st.click_count else " 0.0"
         clicks_val = f"{st.click_count:6d}"
         line_parts = [
@@ -137,26 +130,23 @@ class StatusRenderer:
         # Color minimal elements
         if self.use_color:
             if st.running:
-                line = line.replace(state_sym, self._color(state_sym, '32'))
+                line = line.replace(state_sym, self._color(state_sym, "32"))
             else:
-                line = line.replace(state_sym, self._color(state_sym, '33'))
+                line = line.replace(state_sym, self._color(state_sym, "33"))
             if not st.local_keys_enabled:
-                line = line.replace('lock:yes', self._color('lock:yes', '31'))
+                line = line.replace("lock:yes", self._color("lock:yes", "31"))
         width = shutil.get_terminal_size(fallback=(120, 20)).columns
         if len(line) > width:
-            line = line[:max(0, width-1)] + '…'
+            line = line[: max(0, width - 1)] + "…"
         return line
 
     def maybe_render(self, st: Status, force: bool = False):
         now = time.time()
-        if (
-            not self.dirty and not force and
-            (now - self.last_render) < self.interval
-        ):
+        if not self.dirty and not force and (now - self.last_render) < self.interval:
             return
         line = self.build_line(st)
         if line != self._cached_line or force:
-            sys.stdout.write('\r' + line + '\x1b[K')
+            sys.stdout.write("\r" + line + "\x1b[K")
             sys.stdout.flush()
             self._cached_line = line
         self.dirty = False
@@ -167,11 +157,9 @@ class StatusRenderer:
         elapsed = time.time() - st.start_time
         summary = (
             f"Stopped after {st.click_count} clicks in {elapsed:.1f}s "
-            f"(avg {(st.click_count/elapsed) if elapsed > 0 else 0:.2f} cps)"
+            f"(avg {(st.click_count / elapsed) if elapsed > 0 else 0:.2f} cps)"
         )
-        sys.stdout.write(
-            '\r' + ' ' * max(len(self._cached_line), len(summary)) + '\r'
-        )
+        sys.stdout.write("\r" + " " * max(len(self._cached_line), len(summary)) + "\r")
         print(summary)
 
 
@@ -411,9 +399,10 @@ def on_press(key):
 
     # Detect global combo Ctrl+Alt+K (works always)
     try:
-        if (any(_is_ctrl(k) for k in _pressed_keys)
-                and any(_is_alt(k) for k in _pressed_keys)):
-            if getattr(key, 'char', None) == 'k':  # final key in combo
+        if any(_is_ctrl(k) for k in _pressed_keys) and any(
+            _is_alt(k) for k in _pressed_keys
+        ):
+            if getattr(key, "char", None) == "k":  # final key in combo
                 global_toggle_keys()
                 return
     except Exception:
@@ -424,27 +413,27 @@ def on_press(key):
         return
 
     try:
-        ch = getattr(key, 'char', None)
-        if ch == 's':
+        ch = getattr(key, "char", None)
+        if ch == "s":
             toggle_running()
-        elif ch == '+':  # shift + '=' on most keyboards
+        elif ch == "+":  # shift + '=' on most keyboards
             increase_speed()
-        elif ch == '-':
+        elif ch == "-":
             decrease_speed()
-        elif ch == ']':  # increase hold/"pressure"
+        elif ch == "]":  # increase hold/"pressure"
             increase_hold()
-        elif ch == '[':  # decrease hold/"pressure"
+        elif ch == "[":  # decrease hold/"pressure"
             decrease_hold()
-        elif ch == 'm':  # toggle click method
+        elif ch == "m":  # toggle click method
             toggle_method()
-        elif ch == 'c':  # single test click
+        elif ch == "c":  # single test click
             single_test_click()
-        elif ch == 'd':  # toggle debug logs
+        elif ch == "d":  # toggle debug logs
             toggle_debug()
-        elif ch == 'j':  # toggle jitter move
+        elif ch == "j":  # toggle jitter move
             global jitter_enabled
             jitter_enabled = not jitter_enabled
-            state = 'enabled' if jitter_enabled else 'disabled'
+            state = "enabled" if jitter_enabled else "disabled"
             _set_message(f"jitter:{state}")
             _refresh_status()
     except Exception:
@@ -464,6 +453,7 @@ def main():  # pragma: no cover - interactive app
     # bypassed (or an older entry point is used), we don't start the loop.
     try:
         import sys as _sys
+
         _argv = _sys.argv[1:]
         if any(a in ("-h", "--help") for a in _argv):
             _help_lines = [
@@ -485,6 +475,7 @@ def main():  # pragma: no cover - interactive app
             return
         if any(a in ("-V", "--version") for a in _argv):
             from . import __version__ as _ver
+
             print(_ver)
             return
     except Exception:
