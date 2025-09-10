@@ -6,6 +6,7 @@ Usage:
 Without flags, starts the interactive autoclicker. See README for hotkeys
 and macOS permission requirements.
 """
+
 from __future__ import annotations
 
 
@@ -34,9 +35,11 @@ Notes:
 
     if any(a in ("-V", "--version") for a in argv):
         from . import __version__
+
         print(__version__)
         return
 
     # Start the application only when not handling flags.
     from . import app
+
     app.main()

@@ -1,6 +1,6 @@
-# Autoclicker
+# Clickmate
 
-A Python autoclicker with a macOS-friendly multi-engine click system. It prefers native Quartz CoreGraphics events on macOS (when available) for best compatibility, and falls back to `pynput` or `pyautogui` if needed. Randomized delays, adjustable “pressure” (hold time), and a single-line status display are built in.
+Clickmate is a Python autoclicker with a macOS-friendly multi-engine click system. It prefers native Quartz CoreGraphics events on macOS (when available) for best compatibility, and falls back to `pynput` or `pyautogui` if needed. Randomized delays, adjustable “pressure” (hold time), and a single-line status display are built in.
 
 ## Features
 
@@ -28,17 +28,17 @@ Requires Python `>=3.11` and `uv` installed.
 - One-off run without installation (preferred for quick use):
 
    ```bash
-   uvx autoclicker --help
-   uvx autoclicker --version
-   uvx autoclicker
+   uvx clickmate --help
+   uvx clickmate --version
+   uvx clickmate
    ```
 
 - Install globally as a persistent tool (adds `autoclicker` to your `PATH`):
 
    ```bash
-   uv tool install autoclicker
+   uv tool install clickmate
    # then simply:
-   autoclicker
+   clickmate
    ```
 
 - Run from a local checkout without publishing:
@@ -47,7 +47,7 @@ Requires Python `>=3.11` and `uv` installed.
    # ephemeral run from the current workspace
    # NOTE: `uv tool run` uses a cached, isolated env. Add `--refresh` to
    # pick up local source changes if you haven't bumped the version.
-   uv tool run --from . --refresh autoclicker
+   uv tool run --from . --refresh clickmate
    # or install the local project as a tool
    uv tool install .
    ```
@@ -59,10 +59,10 @@ Development workflow (recommended):
    ```bash
    uv sync
       # see flags
-      uv run autoclicker --help
-      uv run autoclicker --version
+      uv run clickmate --help
+      uv run clickmate --version
       # run the console script
-      uv run autoclicker
+      uv run clickmate
    # or run the module directly
       uv run -m autoclicker --help
    ```
@@ -73,8 +73,8 @@ it's likely using a previously cached tool environment. Fix it by either:
 - adding `--refresh` (recommended for local dev):
 
   ```bash
-  uv tool run --from . --refresh autoclicker --help
-  uv tool run --from . --refresh autoclicker --version
+   uv tool run --from . --refresh clickmate --help
+   uv tool run --from . --refresh clickmate --version
   ```
 
 - or bumping the package `version` in `pyproject.toml` (forces a new cache key)
@@ -154,6 +154,29 @@ Quartz (CoreGraphics) clicks require the `Quartz` Python module (PyObjC). If it�
   - Enable jitter with `j` (adds a subtle 1px move before click)
   - Increase hold time with `]` to ~0.02–0.05s
 - Terminal output looks noisy: that’s likely not a TTY; run in a normal terminal to see the single-line status, or consider adding flags later to reduce output.
+
+## CI/CD (GitHub Actions + uv)
+
+This repo uses GitHub Actions with `uv` for linting, testing, building, and publishing:
+
+- CI (`.github/workflows/ci.yml`): runs on pushes/PRs, installs with `uv sync`, lints with `ruff`, and runs `pytest` across Python 3.11–3.13.
+- Release (`.github/workflows/release.yml`): on tags like `v0.1.0`, builds via `uv build --no-sources` and publishes via `uv publish` using PyPI Trusted Publishing (OIDC).
+
+To publish:
+
+1. Configure a Trusted Publisher for the PyPI project `autoclicker` (and optionally TestPyPI).
+2. Push a tag `vX.Y.Z` to trigger the release workflow.
+3. Pre-release tags containing `rc` will also publish to TestPyPI.
+
+## Contributing and community
+
+- Please see `CONTRIBUTING.md` for how to set up your environment and submit PRs.
+- See `CODE_OF_CONDUCT.md` for expected community behavior.
+- Security reports: see `SECURITY.md`.
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for details.
 
 ## Dependencies
 
