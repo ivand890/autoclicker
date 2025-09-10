@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, feat-**, fix-**, chore-**, refactor-**, ci-** ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv with Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Sync project (deps + dev)
+        run: uv sync --all-extras --dev
+
+      - name: Lint (ruff)
+        run: |
+          uv run ruff check --output-format=github src tests
+          uv run ruff format --check src tests
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Minimize uv cache
+        if: always()
+        run: uv cache prune --ci
