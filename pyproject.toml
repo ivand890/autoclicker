@@ -1,5 +1,5 @@
 [project]
-name = "autoclicker"
+name = "clickmate"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -8,6 +8,29 @@ dependencies = [
     "pyautogui>=0.9.54",
     "pynput>=1.8.1",
 ]
+license = { file = "LICENSE" }
+authors = [
+    { name = "ivand890" }
+]
+keywords = ["autoclicker", "clickmate", "automation", "macos", "quartz", "mouse", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Utilities",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: Windows :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.urls]
+Homepage = "https://github.com/ivand890/autoclicker"
+Repository = "https://github.com/ivand890/autoclicker"
+Issues = "https://github.com/ivand890/autoclicker/issues"
+Changelog = "https://github.com/ivand890/autoclicker/releases"
 
 [project.optional-dependencies]
 mac = [
@@ -16,7 +39,7 @@ mac = [
 ]
 
 [project.scripts]
-autoclicker = "autoclicker.cli:main"
+clickmate = "autoclicker.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.8.11,<0.9.0"]
@@ -25,3 +48,19 @@ build-backend = "uv_build"
 [tool.uv]
 # Ensure the project is treated as a real package and built/installed for tools
 package = true
+
+# Allow trusted publishing checks in CI contexts
+# trusted-publishing = "auto"
+
+[[tool.uv.index]]
+# Optional alternate index for pre-releases/testing via `uv publish --index testpypi`
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.6.2",
+]
