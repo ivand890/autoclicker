@@ -35,5 +35,5 @@ Thanks for taking the time to contribute!
 
 ## Release process
 
-- Create a tag `vX.Y.Z` to trigger the GitHub Actions Release workflow.
-- Pre-releases with `rc` also publish to TestPyPI.
+- Create a tag `vX.Y.Z` (optionally with pre-release like `-rc.1`) to trigger the GitHub Actions Release workflow. The package version is derived from the tag and injected into the build.
+- Publishing targets PyPI using Trusted Publishers (OIDC). TestPyPI publishing has been removed; use your fork or a dry-run locally if needed.

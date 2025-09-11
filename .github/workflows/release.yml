@@ -24,6 +24,42 @@ jobs:
             **/pyproject.toml
             **/uv.lock
 
+      - name: Derive version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          # Strip leading 'v' from tag like v1.2.3[-prerelease]
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ -z "${VERSION}" ]]; then
+            echo "Failed to derive version from tag '${GITHUB_REF_NAME}'" >&2
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Validate SemVer
+        run: |
+          set -euo pipefail
+          if [[ -n "${VERSION:-}" ]]; then
+            uv run --no-project --with semver scripts/validate_version.py
+          else
+            echo "VERSION not set; cannot validate." >&2
+            exit 1
+          fi
+
+      - name: Update project version files
+        run: |
+          set -euo pipefail
+          if [[ -n "${VERSION:-}" ]]; then
+            echo "Setting project version to ${VERSION}"
+            uv run --no-project --with tomlkit scripts/update_version.py
+            echo "pyproject.toml version:"
+            grep -E "^version = \".*\"" pyproject.toml || true
+            echo "Package __version__:"
+            grep -E "^__version__ = \".*\"" src/autoclicker/__init__.py || true
+          else
+            echo "VERSION not set; leaving project version unchanged." >&2
+          fi
+
       - name: Build (sdist and wheel)
         run: |
           uv build --no-sources
@@ -61,32 +97,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Uses OIDC with PyPI Trusted Publishers; ensure project is configured on PyPI.
           uv publish --check-url https://pypi.org/simple/
-
-  publish-to-testpypi:
-    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'rc')
-    name: Publish to TestPyPI (pre-releases)
-    runs-on: ubuntu-latest
-    needs: build-sdist-wheel
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/project/clickmate/
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
-      - name: Publish to TestPyPI
-        env:
-          # Option 1: Trusted publishing if configured for TestPyPI
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Option 2: Token-based, if not using trusted publishers:
-          # UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          # When using --index testpypi, set check URL to the index simple API to enable duplicate-skip checks
-          uv publish --index testpypi --check-url https://test.pypi.org/simple/
