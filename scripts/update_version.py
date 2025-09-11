@@ -22,7 +22,7 @@ def main() -> None:
     # Update pyproject.toml
     try:
         import tomlkit  # type: ignore
-    except Exception as e:
+    except ImportError as e:
         raise SystemExit(f"tomlkit is required in CI to update pyproject.toml: {e}")
 
     text = pyproject_path.read_text(encoding="utf-8")

@@ -34,13 +34,17 @@ jobs:
             echo "Failed to derive version from tag '${GITHUB_REF_NAME}'" >&2
             exit 1
           fi
-          # SemVer v2 check: 1.2.3 with optional pre-release/build metadata.
-          # - Pre-release and build are series of dot-separated identifiers; identifiers contain only [0-9A-Za-z-].
-          if [[ ! "${VERSION}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]]; then
-            echo "Tag-derived version '${VERSION}' is not valid SemVer (examples: 1.2.3, 1.2.3-rc.1, 1.2.3+build.5)." >&2
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Validate SemVer
+        run: |
+          set -euo pipefail
+          if [[ -n "${VERSION:-}" ]]; then
+            uv run --no-project --with semver scripts/validate_version.py
+          else
+            echo "VERSION not set; cannot validate." >&2
             exit 1
           fi
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Update project version files
         run: |
