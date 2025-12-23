@@ -402,7 +402,11 @@ def on_press(key):
         if any(_is_ctrl(k) for k in _pressed_keys) and any(
             _is_alt(k) for k in _pressed_keys
         ):
-            if getattr(key, "char", None) == "k":  # final key in combo
+            # On Windows, Ctrl+K often results in '\x0b' (ASCII 11)
+            # And Ctrl+Alt+K might result in vk=75 with char=None
+            char = getattr(key, "char", None)
+            vk = getattr(key, "vk", None)
+            if char in ("k", "\x0b") or vk == 75:
                 global_toggle_keys()
                 return
     except Exception:
