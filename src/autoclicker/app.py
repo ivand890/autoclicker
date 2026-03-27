@@ -41,6 +41,9 @@ cursor_lock_enabled = False  # Lock cursor position when running
 locked_position = None  # (x, y) tuple
 _last_lock_alert = 0.0  # track last alert time for throttling
 _pressed_keys = set()  # track currently pressed keys for combo detection
+_cursor_lock_thread = None
+_cursor_lock_active = threading.Event()
+_cursor_lock_shutdown = threading.Event()
 
 
 # ---------------- Status line support -----------------
@@ -334,6 +337,7 @@ def toggle_running():
     running = not running
     if running:
         locked_position = _mouse.position
+    _sync_cursor_lock_worker_state()
     _set_message("started" if running else "paused")
     _refresh_status()
 
@@ -348,8 +352,11 @@ def global_toggle_keys():
 
 
 def toggle_cursor_lock():
-    global cursor_lock_enabled
+    global cursor_lock_enabled, locked_position
     cursor_lock_enabled = not cursor_lock_enabled
+    if cursor_lock_enabled:
+        locked_position = _mouse.position
+    _sync_cursor_lock_worker_state()
     state = "enabled" if cursor_lock_enabled else "disabled"
     _set_message(f"cursor_lock:{state}")
     _refresh_status()
@@ -503,14 +510,49 @@ def _enforce_cursor_lock():
     return False
 
 
+def _ensure_cursor_lock_worker():
+    global _cursor_lock_thread
+    if _cursor_lock_thread and _cursor_lock_thread.is_alive():
+        return
+    _cursor_lock_shutdown.clear()
+    _cursor_lock_thread = threading.Thread(
+        target=_cursor_lock_worker,
+        daemon=True,
+    )
+    _cursor_lock_thread.start()
+
+
+def _sync_cursor_lock_worker_state():
+    if running and cursor_lock_enabled:
+        _ensure_cursor_lock_worker()
+        _cursor_lock_active.set()
+    else:
+        _cursor_lock_active.clear()
+
+
+def _stop_cursor_lock_worker():
+    global _cursor_lock_thread
+    thread = _cursor_lock_thread
+    _cursor_lock_shutdown.set()
+    _cursor_lock_active.set()
+    if thread and thread.is_alive():
+        thread.join(timeout=0.1)
+    _cursor_lock_active.clear()
+    _cursor_lock_thread = None
+
+
 def _cursor_lock_worker():
     """Dedicated thread to enforce cursor lock with high frequency."""
-    while True:
-        try:
-            _enforce_cursor_lock()
-        except Exception:
-            pass
-        time.sleep(0.005)  # 200Hz for smooth locking
+    while not _cursor_lock_shutdown.is_set():
+        _cursor_lock_active.wait()
+        if _cursor_lock_shutdown.is_set():
+            break
+        while _cursor_lock_active.is_set() and not _cursor_lock_shutdown.is_set():
+            try:
+                _enforce_cursor_lock()
+            except Exception:
+                pass
+            time.sleep(0.005)  # 200Hz for smooth locking
 
 
 def main():  # pragma: no cover - interactive app
@@ -555,10 +597,6 @@ def main():  # pragma: no cover - interactive app
     mouse_listener = MouseListener(on_move=on_mouse_move)
     mouse_listener.start()
 
-    # Start the high-frequency cursor lock thread
-    lock_thread = threading.Thread(target=_cursor_lock_worker, daemon=True)
-    lock_thread.start()
-
     print("Autoclicker ready (status line below). Press Ctrl+C to exit.")
     print(
         "Keys: 's' start/pause, '+' faster, '-' slower, '['/']' hold time,\n"
@@ -598,6 +636,10 @@ def main():  # pragma: no cover - interactive app
             pass
         try:
             mouse_listener.stop()
+        except Exception:
+            pass
+        try:
+            _stop_cursor_lock_worker()
         except Exception:
             pass
         try:
