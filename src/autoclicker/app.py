@@ -1,9 +1,14 @@
 import time
 import random
+import threading
 import pyautogui
 from pynput import keyboard
 from pynput.keyboard import Key
-from pynput.mouse import Controller as MouseController, Button
+from pynput.mouse import (
+    Controller as MouseController,
+    Button,
+    Listener as MouseListener,
+)
 import importlib
 import sys
 import shutil
@@ -32,7 +37,13 @@ debug = False
 jitter_enabled = False  # default jitter disabled (enable with 'j' if needed)
 jitter_px = 1
 local_keys_enabled = True  # when False, only the global hotkey works
+cursor_lock_enabled = False  # Lock cursor position when running
+locked_position = None  # (x, y) tuple
+_last_lock_alert = 0.0  # track last alert time for throttling
 _pressed_keys = set()  # track currently pressed keys for combo detection
+_cursor_lock_thread = None
+_cursor_lock_active = threading.Event()
+_cursor_lock_shutdown = threading.Event()
 
 
 # ---------------- Status line support -----------------
@@ -46,6 +57,7 @@ class Status:
     jitter_enabled: bool
     debug: bool
     local_keys_enabled: bool
+    cursor_lock_enabled: bool
     click_count: int = 0
     last_click_ts: float | None = None
     next_delay: float | None = None
@@ -85,6 +97,7 @@ class StatusRenderer:
         state_sym = "▶" if st.running else "⏸"
         # lock shows yes/no for compatibility (yes = locked)
         lock_val = "no" if st.local_keys_enabled else "yes"
+        clock_val = "yes" if st.cursor_lock_enabled else "no"
         jitter_sym = "J" if st.jitter_enabled else "-"
         debug_sym = "D" if st.debug else "-"
         method_map = {"quartz": "QTZ", "pynput": "PNP", "pyautogui": "PGA"}
@@ -117,6 +130,7 @@ class StatusRenderer:
             f"jitter:{jitter_sym}",
             f"debug:{debug_sym}",
             f"lock:{lock_val}",
+            f"clock:{clock_val}",
             f"clicks:{clicks_val}",
             f"last:{last_val}",
             f"next:{next_val}",
@@ -135,6 +149,8 @@ class StatusRenderer:
                 line = line.replace(state_sym, self._color(state_sym, "33"))
             if not st.local_keys_enabled:
                 line = line.replace("lock:yes", self._color("lock:yes", "31"))
+            if st.cursor_lock_enabled:
+                line = line.replace("clock:yes", self._color("clock:yes", "36"))
         width = shutil.get_terminal_size(fallback=(120, 20)).columns
         if len(line) > width:
             line = line[: max(0, width - 1)] + "…"
@@ -172,6 +188,7 @@ status = Status(
     jitter_enabled=jitter_enabled,
     debug=debug,
     local_keys_enabled=local_keys_enabled,
+    cursor_lock_enabled=cursor_lock_enabled,
 )
 status_renderer = StatusRenderer()
 
@@ -185,6 +202,7 @@ def _refresh_status(mark: bool = True):
     status.jitter_enabled = jitter_enabled
     status.debug = debug
     status.local_keys_enabled = local_keys_enabled
+    status.cursor_lock_enabled = cursor_lock_enabled
     if mark:
         status_renderer.mark()
 
@@ -315,8 +333,11 @@ def perform_click(with_jitter: bool = True):
 
 
 def toggle_running():
-    global running
+    global running, locked_position
     running = not running
+    if running:
+        locked_position = _mouse.position
+    _sync_cursor_lock_worker_state()
     _set_message("started" if running else "paused")
     _refresh_status()
 
@@ -327,6 +348,17 @@ def global_toggle_keys():
     local_keys_enabled = not local_keys_enabled
 
     _set_message("keys:unlocked" if local_keys_enabled else "keys:locked")
+    _refresh_status()
+
+
+def toggle_cursor_lock():
+    global cursor_lock_enabled, locked_position
+    cursor_lock_enabled = not cursor_lock_enabled
+    if cursor_lock_enabled:
+        locked_position = _mouse.position
+    _sync_cursor_lock_worker_state()
+    state = "enabled" if cursor_lock_enabled else "disabled"
+    _set_message(f"cursor_lock:{state}")
     _refresh_status()
 
 
@@ -440,6 +472,8 @@ def on_press(key):
             state = "enabled" if jitter_enabled else "disabled"
             _set_message(f"jitter:{state}")
             _refresh_status()
+        elif ch == "l":  # toggle cursor lock
+            toggle_cursor_lock()
     except Exception:
         pass
 
@@ -450,6 +484,75 @@ def on_release(key):
         _pressed_keys.discard(key)
     except Exception:
         pass
+
+
+def on_mouse_move(x, y):
+    # We now use a dedicated thread for more aggressive locking on Windows,
+    # but we keep the listener for potential future use or other platforms.
+    pass
+
+
+def _enforce_cursor_lock():
+    """Logic to enforce cursor lock. Returns True if alert was triggered."""
+    global _last_lock_alert
+    if running and cursor_lock_enabled and locked_position:
+        curr = _mouse.position
+        # Check distance (squared)
+        dx = curr[0] - locked_position[0]
+        dy = curr[1] - locked_position[1]
+        if (dx * dx + dy * dy) > 25:  # > 5 pixels
+            _mouse.position = locked_position
+            now = time.time()
+            if now - _last_lock_alert > 2.0:
+                _set_message("Cursor locked! Movement detected.")
+                _last_lock_alert = now
+                return True
+    return False
+
+
+def _ensure_cursor_lock_worker():
+    global _cursor_lock_thread
+    if _cursor_lock_thread and _cursor_lock_thread.is_alive():
+        return
+    _cursor_lock_shutdown.clear()
+    _cursor_lock_thread = threading.Thread(
+        target=_cursor_lock_worker,
+        daemon=True,
+    )
+    _cursor_lock_thread.start()
+
+
+def _sync_cursor_lock_worker_state():
+    if running and cursor_lock_enabled:
+        _ensure_cursor_lock_worker()
+        _cursor_lock_active.set()
+    else:
+        _cursor_lock_active.clear()
+
+
+def _stop_cursor_lock_worker():
+    global _cursor_lock_thread
+    thread = _cursor_lock_thread
+    _cursor_lock_shutdown.set()
+    _cursor_lock_active.set()
+    if thread and thread.is_alive():
+        thread.join(timeout=0.1)
+    _cursor_lock_active.clear()
+    _cursor_lock_thread = None
+
+
+def _cursor_lock_worker():
+    """Dedicated thread to enforce cursor lock with high frequency."""
+    while not _cursor_lock_shutdown.is_set():
+        _cursor_lock_active.wait()
+        if _cursor_lock_shutdown.is_set():
+            break
+        while _cursor_lock_active.is_set() and not _cursor_lock_shutdown.is_set():
+            try:
+                _enforce_cursor_lock()
+            except Exception:
+                pass
+            time.sleep(0.005)  # 200Hz for smooth locking
 
 
 def main():  # pragma: no cover - interactive app
@@ -473,7 +576,7 @@ def main():  # pragma: no cover - interactive app
                 "  - Hotkeys:",
                 "      s start/pause • +/− speed • ]/[ hold • m method •",
                 "      c test",
-                "      j jitter • d debug • Ctrl+Alt+K lock",
+                "      j jitter • d debug • l lock cursor • Ctrl+Alt+K lock keys",
             ]
             print("\n".join(_help_lines))
             return
@@ -490,11 +593,15 @@ def main():  # pragma: no cover - interactive app
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.start()
 
+    # Mouse listener for future use
+    mouse_listener = MouseListener(on_move=on_mouse_move)
+    mouse_listener.start()
+
     print("Autoclicker ready (status line below). Press Ctrl+C to exit.")
     print(
         "Keys: 's' start/pause, '+' faster, '-' slower, '['/']' hold time,\n"
         "      'm' method, 'c' test, 'j' jitter, 'd' debug,\n"
-        "      Ctrl+Alt+K lock keys"
+        "      Ctrl+Alt+K lock keys, 'l' cursor lock"
     )
     _refresh_status()
 
@@ -525,6 +632,14 @@ def main():  # pragma: no cover - interactive app
     finally:
         try:
             listener.stop()
+        except Exception:
+            pass
+        try:
+            mouse_listener.stop()
+        except Exception:
+            pass
+        try:
+            _stop_cursor_lock_worker()
         except Exception:
             pass
         try:
