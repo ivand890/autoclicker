@@ -83,7 +83,7 @@ Example:
 Key fields:
 - `delay` base delay; actual delays are randomized within `rng` (0.5×–1.5×)
 - `hold` button press duration (“pressure”)
-- `meth` engine: `QTZ` (Quartz), `PNP` (pynput)
+- `meth` engine: `QTZ` (Quartz), `PNP` (pynput), `HYP` (Hyprland)
 - `lock` `yes` when local keys are locked (only `Ctrl+Alt+K` works)
 - `fb:N` fallback count when switching engines was required
 
@@ -97,6 +97,24 @@ Grant permissions to your terminal app (Terminal/iTerm/VS Code):
 3. Restart the terminal
 
 Quartz clicks need the `Quartz` module (PyObjC). If unavailable, Clickmate automatically uses `pynput`.
+
+## Linux (Wayland)
+
+`pynput` can't see keys sent to Wayland windows, so on Wayland (e.g. Hyprland, GNOME, KDE) Clickmate reads the keyboard directly from `/dev/input`. Your user needs read access to it:
+```bash
+sudo usermod -aG input $USER   # then log out and back in
+```
+Without that access, hotkeys still work, but only while the Clickmate terminal is focused.
+
+On Hyprland, Clickmate automatically talks to Hyprland's IPC socket (the same
+one `hyprctl` uses) for native Wayland clicks, cursor position, jitter, and
+cursor lock, without launching any processes. The status shows `meth:HYP`. No
+`/dev/uinput` permissions or extra daemon are needed. Move the pointer over the
+browser target and press `s` to start. Hold time is preserved using separate
+button-down and button-up events.
+
+Other Wayland compositors currently use pynput, which only supports XWayland
+windows; a rising click counter does not confirm delivery to a native Wayland app.
 
 ## Troubleshooting
 

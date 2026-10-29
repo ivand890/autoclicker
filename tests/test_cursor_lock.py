@@ -78,7 +78,7 @@ def test_main_does_not_start_cursor_lock_worker_by_default():
     reset_cursor_lock_state()
 
     with (
-        patch("autoclicker.app.keyboard.Listener") as mock_keyboard_listener,
+        patch("autoclicker.app._create_keyboard_listener") as mock_keyboard_listener,
         patch("autoclicker.app.MouseListener") as mock_mouse_listener,
         patch("autoclicker.app.threading.Thread") as mock_thread,
         patch("autoclicker.app.time.sleep", side_effect=KeyboardInterrupt),
@@ -86,7 +86,7 @@ def test_main_does_not_start_cursor_lock_worker_by_default():
         patch("autoclicker.app.status_renderer.finalize"),
         patch.object(sys, "argv", ["autoclicker"]),
     ):
-        mock_keyboard_listener.return_value = MagicMock()
+        mock_keyboard_listener.return_value = (MagicMock(), None)
         mock_mouse_listener.return_value = MagicMock()
 
         app.main()
