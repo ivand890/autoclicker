@@ -1,6 +1,6 @@
 # Clickmate
 
-Clickmate is a macOS-friendly Python autoclicker. It prefers native Quartz CoreGraphics events on macOS (when available) and falls back to `pynput` or `pyautogui`. It features randomized delays, adjustable hold time (“pressure”), and a clean single-line status UI.
+Clickmate is a macOS-friendly Python autoclicker. It prefers native Quartz CoreGraphics events on macOS (when available) and falls back to `pynput`. It features randomized delays, adjustable hold time (“pressure”), and a clean single-line status UI.
 
 ## Features
 
@@ -8,7 +8,7 @@ Clickmate is a macOS-friendly Python autoclicker. It prefers native Quartz CoreG
 - Randomized delay per click (0.5×–1.5× of base)
 - Adjust speed with `+` (faster) / `-` (slower)
 - Adjust hold time with `]` (increase) / `[` (decrease)
-- Toggle click engine with `m` (`pynput` → `quartz` → `pyautogui`)
+- Toggle click engine with `m` (`pynput` ↔ `quartz`, macOS only)
 - Single test click with `c`
 - Optional jitter movement `j` and debug logs `d`
 - Global hotkey to lock/unlock local keys: `Ctrl+Alt+K`
@@ -65,7 +65,7 @@ uv tool install .
 - `s` — start/pause
 - `+` / `-` — faster / slower
 - `]` / `[` — increase / decrease hold time
-- `m` — toggle engine (`pynput` → `quartz` → `pyautogui`)
+- `m` — toggle engine (`pynput` ↔ `quartz`, macOS only)
 - `c` — single test click
 - `j` — toggle jitter
 - `d` — toggle debug logs
@@ -83,7 +83,7 @@ Example:
 Key fields:
 - `delay` base delay; actual delays are randomized within `rng` (0.5×–1.5×)
 - `hold` button press duration (“pressure”)
-- `meth` engine: `QTZ` (Quartz), `PNP` (pynput), `PGA` (pyautogui)
+- `meth` engine: `QTZ` (Quartz), `PNP` (pynput)
 - `lock` `yes` when local keys are locked (only `Ctrl+Alt+K` works)
 - `fb:N` fallback count when switching engines was required
 
@@ -121,6 +121,5 @@ MIT — see `LICENSE`.
 
 ## Dependencies
 
-- `pyautogui` — automation
-- `pynput` — input handling and alternative click path
+- `pynput` — input handling and clicks
 - Optional: `pyobjc` (provides `Quartz`) — enables Quartz engine on macOS

@@ -1,7 +1,6 @@
 import time
 import random
 import threading
-import pyautogui
 from pynput import keyboard
 from pynput.keyboard import Key
 from pynput.mouse import (
@@ -20,6 +19,8 @@ try:
 except Exception:
     _HAS_QUARTZ = False
 
+# Click engines available on this platform, in toggle/fallback order
+_ENGINES = ["pynput", "quartz"] if _HAS_QUARTZ else ["pynput"]
 
 # Runtime state
 running = False
@@ -30,7 +31,7 @@ hold_time = 0.1  # how long to hold the button down per click
 # Randomization multipliers for per-click delay
 MIN_DELAY_MULTIPLIER = 0.5
 MAX_DELAY_MULTIPLIER = 1.5
-# Preferred click method: "pynput", "pyautogui", or "quartz" (macOS)
+# Preferred click method: "pynput" or "quartz" (macOS)
 # Default to Quartz if available for best macOS compatibility
 click_method = "quartz" if _HAS_QUARTZ else "pynput"
 debug = False
@@ -100,7 +101,7 @@ class StatusRenderer:
         clock_val = "yes" if st.cursor_lock_enabled else "no"
         jitter_sym = "J" if st.jitter_enabled else "-"
         debug_sym = "D" if st.debug else "-"
-        method_map = {"quartz": "QTZ", "pynput": "PNP", "pyautogui": "PGA"}
+        method_map = {"quartz": "QTZ", "pynput": "PNP"}
         method_disp = method_map.get(st.click_method, st.click_method)
         # Fixed width numeric fields to avoid jitter
         delay_val = f"{st.delay:5.2f}s"
@@ -213,10 +214,6 @@ def _set_message(msg: str):
     status_renderer.mark()
 
 
-# Configure pyautogui safety
-pyautogui.FAILSAFE = False  # disable corner failsafe to avoid unintended stops
-pyautogui.PAUSE = 0  # no extra pause added by pyautogui
-
 # Shared mouse controller for pynput method
 _mouse = MouseController()
 
@@ -227,31 +224,6 @@ def _click_with_pynput():
     if hold_time > 0:
         time.sleep(hold_time)
     _mouse.release(Button.left)
-
-
-def _click_with_pyautogui():
-    # Click at current pointer location via pyautogui
-    pyautogui.mouseDown()
-    if hold_time > 0:
-        time.sleep(hold_time)
-    pyautogui.mouseUp()
-
-
-def _convert_to_quartz_point(pos):
-    # Convert top-left origin (pyautogui) to bottom-left origin (Quartz)
-    try:
-        Quartz = importlib.import_module("Quartz")
-        CG = Quartz.CoreGraphics
-        bounds = CG.CGDisplayBounds(CG.CGMainDisplayID())
-        height = int(bounds.size.height)
-        return CG.CGPoint(pos[0], height - pos[1])
-    except Exception:
-        # Fallback: return as-is (may be wrong on some layouts)
-        try:
-            CG = Quartz.CoreGraphics  # type: ignore
-            return CG.CGPoint(pos[0], pos[1])
-        except Exception:
-            return pos
 
 
 def _click_with_quartz():
@@ -281,16 +253,19 @@ def _jitter_move():
     if not jitter_enabled or jitter_px <= 0:
         return
     try:
-        if click_method in ("pynput", "quartz"):
-            x, y = _mouse.position
-            _mouse.position = (x + jitter_px, y)
-            _mouse.position = (x, y)
-        else:
-            pyautogui.moveRel(jitter_px, 0, duration=0)
-            pyautogui.moveRel(-jitter_px, 0, duration=0)
+        x, y = _mouse.position
+        _mouse.position = (x + jitter_px, y)
+        _mouse.position = (x, y)
     except Exception:
         # ignore jitter failures
         pass
+
+
+def _click_with(method: str):
+    if method == "quartz":
+        _click_with_quartz()
+    else:
+        _click_with_pynput()
 
 
 def perform_click(with_jitter: bool = True):
@@ -298,35 +273,27 @@ def perform_click(with_jitter: bool = True):
     try:
         if with_jitter:
             _jitter_move()
-        if click_method == "pynput":
-            _click_with_pynput()
-        elif click_method == "quartz":
-            _click_with_quartz()
-        else:
-            _click_with_pyautogui()
+        _click_with(click_method)
         status.click_count += 1
         status.last_click_ts = time.time()
         status_renderer.mark()
     except Exception as e:
         # Fallback to the other method once if one fails
-        order = ["pynput", "quartz", "pyautogui"]
         try:
-            idx = order.index(click_method)
+            idx = _ENGINES.index(click_method)
         except ValueError:
-            idx = 0
-        other = order[(idx + 1) % len(order)]
+            idx = -1
+        other = _ENGINES[(idx + 1) % len(_ENGINES)]
+        if other == click_method:
+            # No alternative engine on this platform
+            raise
         if debug:
             print(f"Click via {click_method} failed: {e} -> trying {other}")
         click_method = other
         status.fallbacks += 1
         status_renderer.mark()
         _set_message(f"fallback->{other}")
-        if other == "pynput":
-            _click_with_pynput()
-        elif other == "quartz":
-            _click_with_quartz()
-        else:
-            _click_with_pyautogui()
+        _click_with(other)
         status.click_count += 1
         status.last_click_ts = time.time()
         status_renderer.mark()
@@ -392,20 +359,18 @@ def decrease_hold():
 
 def toggle_method():
     global click_method
-    order = ["pynput", "quartz" if _HAS_QUARTZ else None, "pyautogui"]
-    order = [m for m in order if m]
     try:
-        idx = order.index(click_method)
+        idx = _ENGINES.index(click_method)
     except ValueError:
         idx = 0
-    click_method = order[(idx + 1) % len(order)]
+    click_method = _ENGINES[(idx + 1) % len(_ENGINES)]
     _set_message(f"method {click_method}")
     _refresh_status()
 
 
 def single_test_click():
-    pos = pyautogui.position()
-    _set_message(f"test {pos[0]},{pos[1]}")
+    x, y = _mouse.position
+    _set_message(f"test {int(x)},{int(y)}")
     perform_click(with_jitter=False)
     _refresh_status()
 
@@ -609,7 +574,7 @@ def main():  # pragma: no cover - interactive app
         while True:
             if running:
                 if debug:
-                    pos = pyautogui.position()
+                    pos = _mouse.position
                     print(
                         f"Clicking at {pos} via {click_method} "
                         f"(delay {delay}s, hold {hold_time}s)"
