@@ -13,6 +13,8 @@ import sys
 import shutil
 from dataclasses import dataclass
 
+from . import hyprland, linux_input
+
 try:
     importlib.import_module("Quartz")
     _HAS_QUARTZ = True
@@ -20,7 +22,14 @@ except Exception:
     _HAS_QUARTZ = False
 
 # Click engines available on this platform, in toggle/fallback order
-_ENGINES = ["pynput", "quartz"] if _HAS_QUARTZ else ["pynput"]
+_HAS_HYPRLAND = linux_input.is_wayland_session() and hyprland.available()
+_ENGINES = (
+    ["hyprland"]
+    if _HAS_HYPRLAND
+    else ["pynput", "quartz"]
+    if _HAS_QUARTZ
+    else ["pynput"]
+)
 
 # Runtime state
 running = False
@@ -33,7 +42,7 @@ MIN_DELAY_MULTIPLIER = 0.5
 MAX_DELAY_MULTIPLIER = 1.5
 # Preferred click method: "pynput" or "quartz" (macOS)
 # Default to Quartz if available for best macOS compatibility
-click_method = "quartz" if _HAS_QUARTZ else "pynput"
+click_method = "hyprland" if _HAS_HYPRLAND else "quartz" if _HAS_QUARTZ else "pynput"
 debug = False
 jitter_enabled = False  # default jitter disabled (enable with 'j' if needed)
 jitter_px = 1
@@ -101,7 +110,7 @@ class StatusRenderer:
         clock_val = "yes" if st.cursor_lock_enabled else "no"
         jitter_sym = "J" if st.jitter_enabled else "-"
         debug_sym = "D" if st.debug else "-"
-        method_map = {"quartz": "QTZ", "pynput": "PNP"}
+        method_map = {"quartz": "QTZ", "pynput": "PNP", "hyprland": "HYP"}
         method_disp = method_map.get(st.click_method, st.click_method)
         # Fixed width numeric fields to avoid jitter
         delay_val = f"{st.delay:5.2f}s"
@@ -214,8 +223,8 @@ def _set_message(msg: str):
     status_renderer.mark()
 
 
-# Shared mouse controller for pynput method
-_mouse = MouseController()
+# Shared controller for clicks, cursor position, jitter, and cursor lock.
+_mouse = hyprland.MouseController() if _HAS_HYPRLAND else MouseController()
 
 
 def _click_with_pynput():
@@ -262,7 +271,9 @@ def _jitter_move():
 
 
 def _click_with(method: str):
-    if method == "quartz":
+    if method == "hyprland":
+        _mouse.click(hold_time)
+    elif method == "quartz":
         _click_with_quartz()
     else:
         _click_with_pynput()
@@ -297,6 +308,20 @@ def perform_click(with_jitter: bool = True):
         status.click_count += 1
         status.last_click_ts = time.time()
         status_renderer.mark()
+
+
+def _try_perform_click(with_jitter=True):
+    global running
+    try:
+        perform_click(with_jitter=with_jitter)
+    except Exception as exc:
+        running = False
+        _sync_cursor_lock_worker_state()
+        _refresh_status()
+        _set_message(f"Click failed: {exc}")
+        print(f"\nClick failed; paused: {exc}", file=sys.stderr)
+        return False
+    return True
 
 
 def toggle_running():
@@ -371,7 +396,7 @@ def toggle_method():
 def single_test_click():
     x, y = _mouse.position
     _set_message(f"test {int(x)},{int(y)}")
-    perform_click(with_jitter=False)
+    _try_perform_click(with_jitter=False)
     _refresh_status()
 
 
@@ -388,6 +413,10 @@ def _is_ctrl(key):
 
 def _is_alt(key):
     return key in (Key.alt, Key.alt_l, Key.alt_r, Key.alt_gr)
+
+
+def _is_cmd(key):
+    return key in (Key.cmd, Key.cmd_l, Key.cmd_r)
 
 
 def on_press(key):
@@ -411,6 +440,12 @@ def on_press(key):
 
     # If local keys locked, ignore all other keys
     if not local_keys_enabled:
+        return
+
+    # Listeners are global, so Ctrl+C, Ctrl+S, Super+L, etc. meant for other
+    # apps would otherwise fire the bare-letter hotkeys. On Hyprland, the
+    # resulting injected click also drops Ctrl, breaking Ctrl+C in the terminal.
+    if any(_is_ctrl(k) or _is_alt(k) or _is_cmd(k) for k in _pressed_keys):
         return
 
     try:
@@ -517,7 +552,28 @@ def _cursor_lock_worker():
                 _enforce_cursor_lock()
             except Exception:
                 pass
-            time.sleep(0.005)  # 200Hz for smooth locking
+            time.sleep(1 / 60)  # ~60Hz; each check is a compositor round trip
+
+
+def _create_keyboard_listener():
+    """Return (listener, note). The note explains degraded hotkey support."""
+    if not linux_input.is_wayland_session():
+        return keyboard.Listener(on_press=on_press, on_release=on_release), None
+
+    # pynput's X11 backend can't see keys sent to Wayland windows
+    evdev_listener = linux_input.EvdevKeyboardListener(on_press, on_release)
+    if evdev_listener.open_devices():
+        return evdev_listener, "Wayland: global hotkeys via /dev/input."
+    evdev_listener.stop()
+
+    note = (
+        "Wayland: no access to /dev/input, so hotkeys only work while this\n"
+        "terminal is focused. For global hotkeys run:\n"
+        "  sudo usermod -aG input $USER   (then log out and back in)"
+    )
+    if linux_input.TerminalKeyListener.available():
+        return linux_input.TerminalKeyListener(on_press, on_release), note
+    return keyboard.Listener(on_press=on_press, on_release=on_release), note
 
 
 def main():  # pragma: no cover - interactive app
@@ -555,12 +611,14 @@ def main():  # pragma: no cover - interactive app
         pass
 
     # Single listener handles both local keys and global combo
-    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener, listener_note = _create_keyboard_listener()
     listener.start()
 
-    # Mouse listener for future use
-    mouse_listener = MouseListener(on_move=on_mouse_move)
-    mouse_listener.start()
+    # Hyprland supplies pointer position directly; no X11 listener needed.
+    mouse_listener = None
+    if not _HAS_HYPRLAND:
+        mouse_listener = MouseListener(on_move=on_mouse_move)
+        mouse_listener.start()
 
     print("Autoclicker ready (status line below). Press Ctrl+C to exit.")
     print(
@@ -568,6 +626,14 @@ def main():  # pragma: no cover - interactive app
         "      'm' method, 'c' test, 'j' jitter, 'd' debug,\n"
         "      Ctrl+Alt+K lock keys, 'l' cursor lock"
     )
+    if listener_note:
+        print(listener_note)
+    if _HAS_HYPRLAND:
+        print("Wayland: native clicks via Hyprland (HYP).")
+    elif linux_input.is_wayland_session():
+        print(
+            "Warning: pynput clicks only support XWayland windows on this compositor."
+        )
     _refresh_status()
 
     try:
@@ -579,7 +645,8 @@ def main():  # pragma: no cover - interactive app
                         f"Clicking at {pos} via {click_method} "
                         f"(delay {delay}s, hold {hold_time}s)"
                     )
-                perform_click(with_jitter=True)
+                if not _try_perform_click(with_jitter=True):
+                    continue
                 nd = random.uniform(
                     delay * MIN_DELAY_MULTIPLIER, delay * MAX_DELAY_MULTIPLIER
                 )
@@ -600,7 +667,8 @@ def main():  # pragma: no cover - interactive app
         except Exception:
             pass
         try:
-            mouse_listener.stop()
+            if mouse_listener is not None:
+                mouse_listener.stop()
         except Exception:
             pass
         try:
