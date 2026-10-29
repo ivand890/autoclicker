@@ -1,19 +1,27 @@
 import time
 import random
 import threading
-from pynput import keyboard
-from pynput.keyboard import Key
-from pynput.mouse import (
-    Controller as MouseController,
-    Button,
-    Listener as MouseListener,
-)
 import importlib
 import sys
 import shutil
 from dataclasses import dataclass
 
 from . import hyprland, linux_input
+from .linux_input import Key
+
+try:
+    from pynput import keyboard
+    from pynput.mouse import (
+        Controller as MouseController,
+        Button,
+        Listener as MouseListener,
+    )
+except ImportError:
+    # pynput's Linux backend needs an X server. Hyprland uses IPC for the
+    # mouse and evdev/terminal for keys, so it can run without one.
+    if not (linux_input.is_wayland_session() and hyprland.available()):
+        raise
+    keyboard = MouseController = Button = MouseListener = None
 
 try:
     importlib.import_module("Quartz")
@@ -419,6 +427,18 @@ def _is_cmd(key):
     return key in (Key.cmd, Key.cmd_l, Key.cmd_r)
 
 
+def _modifier_held():
+    # Snapshot: the listener thread mutates _pressed_keys concurrently
+    keys = tuple(_pressed_keys)
+    return any(_is_ctrl(k) or _is_alt(k) or _is_cmd(k) for k in keys)
+
+
+def _should_defer_click():
+    # Hyprland resets the focused app's modifiers to none after every injected
+    # click, so a click while Ctrl is held would turn Ctrl+C into a plain "c".
+    return click_method == "hyprland" and _modifier_held()
+
+
 def on_press(key):
     # Record key
     _pressed_keys.add(key)
@@ -445,7 +465,7 @@ def on_press(key):
     # Listeners are global, so Ctrl+C, Ctrl+S, Super+L, etc. meant for other
     # apps would otherwise fire the bare-letter hotkeys. On Hyprland, the
     # resulting injected click also drops Ctrl, breaking Ctrl+C in the terminal.
-    if any(_is_ctrl(k) or _is_alt(k) or _is_cmd(k) for k in _pressed_keys):
+    if _modifier_held():
         return
 
     try:
@@ -573,6 +593,11 @@ def _create_keyboard_listener():
     )
     if linux_input.TerminalKeyListener.available():
         return linux_input.TerminalKeyListener(on_press, on_release), note
+    if keyboard is None:
+        raise SystemExit(
+            "No way to read hotkeys: /dev/input is not readable, stdin is not\n"
+            "a terminal, and pynput needs an X server."
+        )
     return keyboard.Listener(on_press=on_press, on_release=on_release), note
 
 
@@ -639,6 +664,9 @@ def main():  # pragma: no cover - interactive app
     try:
         while True:
             if running:
+                if _should_defer_click():
+                    time.sleep(0.01)
+                    continue
                 if debug:
                     pos = _mouse.position
                     print(

@@ -55,3 +55,18 @@ def test_ctrl_alt_k_still_toggles_key_lock():
     with patch.object(app, "global_toggle_keys") as toggle:
         _tap(Key.ctrl_l, Key.alt_l, KeyCode.from_char("k"))
         toggle.assert_called_once()
+
+
+def test_hyprland_click_waits_while_modifier_held(monkeypatch):
+    monkeypatch.setattr(app, "click_method", "hyprland")
+    assert app._should_defer_click() is False
+    app.on_press(Key.ctrl_l)
+    assert app._should_defer_click() is True
+    app.on_release(Key.ctrl_l)
+    assert app._should_defer_click() is False
+
+
+def test_other_engines_click_while_modifier_held(monkeypatch):
+    monkeypatch.setattr(app, "click_method", "pynput")
+    app.on_press(Key.ctrl_l)
+    assert app._should_defer_click() is False

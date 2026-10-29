@@ -3,7 +3,8 @@
 On Wayland, pynput's Xlib listener only sees keys delivered to XWayland
 windows, so hotkeys pressed in native Wayland apps (including the terminal)
 never arrive. These listeners feed the same ``on_press``/``on_release``
-callbacks with pynput ``Key``/``KeyCode`` objects:
+callbacks with pynput ``Key``/``KeyCode`` objects (or look-alikes when pynput
+can't load because there is no X server):
 
 - ``EvdevKeyboardListener`` reads physical keyboards from ``/dev/input``
   (global, requires read access, e.g. membership in the ``input`` group).
@@ -11,12 +12,35 @@ callbacks with pynput ``Key``/``KeyCode`` objects:
   (works without extra permissions, but only while the terminal is focused).
 """
 
+import enum
+import glob
 import os
 import select
 import sys
 import threading
+import time
+from dataclasses import dataclass
 
-from pynput.keyboard import Key, KeyCode
+try:
+    from pynput.keyboard import Key, KeyCode
+except ImportError:
+    # pynput's Linux backend needs an X server. Hyprland without Xwayland
+    # still works through IPC and evdev, which only need distinct key objects.
+    Key = enum.Enum(
+        "Key",
+        "alt alt_l alt_r alt_gr cmd cmd_l cmd_r ctrl ctrl_l ctrl_r "
+        "shift shift_l shift_r",
+    )
+
+    @dataclass(frozen=True)
+    class KeyCode:
+        char: str | None = None
+        vk: int | None = None
+
+        @classmethod
+        def from_char(cls, char):
+            return cls(char=char)
+
 
 try:
     import evdev
@@ -66,6 +90,9 @@ def _build_keymaps():
 
 _SPECIAL_KEYS, _CHAR_KEYS = _build_keymaps()
 
+# How often to look for keyboards plugged in after startup
+_RESCAN_INTERVAL = 2.0
+
 
 class EvdevKeyboardListener:
     """Global keyboard listener reading every keyboard device via evdev."""
@@ -73,7 +100,9 @@ class EvdevKeyboardListener:
     def __init__(self, on_press, on_release):
         self.on_press = on_press
         self.on_release = on_release
-        self._devices = []
+        self._devices = {}  # path -> InputDevice
+        self._probed = set()  # paths already tried, keyboards or not
+        self._last_scan = 0.0
         self._down = {}  # evdev code -> key object emitted on press
         self._stop_r, self._stop_w = os.pipe()
         self._thread = None
@@ -83,20 +112,41 @@ class EvdevKeyboardListener:
         keys = dev.capabilities().get(ecodes.EV_KEY, [])
         return ecodes.KEY_S in keys and ecodes.KEY_K in keys
 
-    def open_devices(self) -> int:
-        """Open readable keyboard devices; return how many were opened."""
-        if evdev is None:
-            return 0
-        for path in evdev.list_devices():
+    def _scan(self):
+        """Open keyboards that appeared since the last scan."""
+        self._last_scan = time.monotonic()
+        # evdev.list_devices() skips devices that aren't also writable, but
+        # reading is all we need, so let InputDevice try each node.
+        paths = set(glob.glob("/dev/input/event*"))
+        self._probed &= paths  # re-probe event nodes reused by new devices
+        for path in sorted(paths - self._probed):
+            self._probed.add(path)
             try:
                 dev = evdev.InputDevice(path)
             except OSError:
                 continue
             if self._is_keyboard(dev):
-                self._devices.append(dev)
+                self._devices[path] = dev
             else:
                 dev.close()
+
+    def open_devices(self) -> int:
+        """Open readable keyboard devices; return how many were opened."""
+        if evdev is None:
+            return 0
+        self._scan()
         return len(self._devices)
+
+    def _disconnect(self, path):
+        dev = self._devices.pop(path)
+        self._probed.discard(path)
+        try:
+            dev.close()
+        except Exception:
+            pass
+        # Its keys will never report a release; don't leave modifiers stuck.
+        for code in list(self._down):
+            self.on_release(self._down.pop(code))
 
     def _shift_down(self) -> bool:
         return ecodes.KEY_LEFTSHIFT in self._down or ecodes.KEY_RIGHTSHIFT in self._down
@@ -124,18 +174,24 @@ class EvdevKeyboardListener:
                 self.on_release(key)
 
     def _run(self):
-        fds = {dev.fd: dev for dev in self._devices}
-        while fds:
-            readable, _, _ = select.select([*fds, self._stop_r], [], [])
+        while True:
+            fds = {dev.fd: path for path, dev in self._devices.items()}
+            readable, _, _ = select.select(
+                [*fds, self._stop_r], [], [], _RESCAN_INTERVAL
+            )
             if self._stop_r in readable:
                 return
+            if time.monotonic() - self._last_scan >= _RESCAN_INTERVAL:
+                self._scan()
             for fd in readable:
-                dev = fds[fd]
+                path = fds[fd]
                 try:
-                    events = list(dev.read())
+                    events = list(self._devices[path].read())
+                except BlockingIOError:
+                    continue
                 except OSError:
-                    # Device unplugged
-                    del fds[fd]
+                    # Device unplugged; a later scan picks it up if it returns
+                    self._disconnect(path)
                     continue
                 for ev in events:
                     if ev.type == ecodes.EV_KEY:
@@ -152,7 +208,7 @@ class EvdevKeyboardListener:
         os.write(self._stop_w, b"x")
         if self._thread:
             self._thread.join(timeout=0.5)
-        for dev in self._devices:
+        for dev in self._devices.values():
             try:
                 dev.close()
             except Exception:
@@ -169,6 +225,7 @@ class TerminalKeyListener:
         self.on_release = on_release
         self._fd = sys.stdin.fileno()
         self._saved_attrs = None
+        self._pending = b""  # start of an escape sequence split across reads
         self._stop_r, self._stop_w = os.pipe()
         self._thread = None
 
@@ -185,23 +242,55 @@ class TerminalKeyListener:
             self.on_release(m)
 
     def handle_bytes(self, data: bytes):
+        data = self._pending + data
+        self._pending = b""
         i = 0
         while i < len(data):
-            ch = chr(data[i])
-            # Ctrl+Alt+K arrives as ESC followed by Ctrl+K (0x0b)
-            if ch == "\x1b" and data[i + 1 : i + 2] == b"\x0b":
-                self._tap(KeyCode.from_char("k"), Key.ctrl_l, Key.alt_l)
-                i += 2
+            if data[i] == 0x1B:
+                end = self._escape_end(data, i)
+                if end is None:
+                    # Incomplete sequence; wait for the rest
+                    self._pending = data[i:]
+                    return
+                # Ctrl+Alt+K arrives as ESC followed by Ctrl+K (0x0b). Every
+                # other sequence (arrows, F-keys, Alt+key) is not a hotkey.
+                if data[i : i + 2] == b"\x1b\x0b":
+                    self._tap(KeyCode.from_char("k"), Key.ctrl_l, Key.alt_l)
+                i = end
                 continue
+            ch = chr(data[i])
             if ch.isprintable():
                 self._tap(KeyCode.from_char(ch))
             i += 1
 
+    @staticmethod
+    def _escape_end(data: bytes, i: int):
+        """Index just past the escape sequence at data[i], or None if cut off."""
+        if i + 1 >= len(data):
+            return None
+        if data[i + 1] == ord("O"):  # SS3, e.g. ESC O P for F1
+            return i + 3 if i + 2 < len(data) else None
+        if data[i + 1] == ord("["):  # CSI, e.g. ESC [ D or ESC [ 1 ; 5 C
+            for j in range(i + 2, len(data)):
+                if 0x40 <= data[j] <= 0x7E:  # final byte
+                    return j + 1
+            return None
+        return i + 2  # ESC + key is Alt+key
+
+    def flush_pending(self):
+        """Treat a lone ESC that nothing followed as a plain Esc press."""
+        self._pending = b""
+
     def _run(self):
         while True:
-            readable, _, _ = select.select([self._fd, self._stop_r], [], [])
+            # A real escape sequence arrives at once; a lone ESC is just Esc.
+            timeout = 0.05 if self._pending else None
+            readable, _, _ = select.select([self._fd, self._stop_r], [], [], timeout)
             if self._stop_r in readable:
                 return
+            if not readable:
+                self.flush_pending()
+                continue
             try:
                 data = os.read(self._fd, 64)
             except OSError:
